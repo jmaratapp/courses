@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Liste de Courses Partagée</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#16a34a">
+  <link rel="apple-touch-icon" href="icon-512.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase App & Firestore SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    body { -webkit-tap-highlight-color: transparent; user-select: none; }
+    .strike-through { text-decoration: line-through; opacity: 0.5; }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen text-gray-800 flex flex-col pb-10">
+
+  <!-- En-tête -->
+  <header class="bg-emerald-600 text-white p-4 shadow-md sticky top-0 z-50 flex justify-between items-center">
+    <h1 class="text-xl font-bold flex items-center gap-2">
+      <i class="fa-solid fa-cart-shopping"></i> Courses Partagées
+    </h1>
+    <div id="statusBadge" class="bg-emerald-700 text-xs px-2 py-1 rounded-full flex items-center gap-1">
+      <i class="fa-solid fa-wifi"></i> En ligne
+    </div>
+  </header>
+
+  <main class="max-w-md mx-auto w-full p-4 flex-1 flex flex-col gap-4">
+
+    <!-- Gestion du Groupe / Code de partage -->
+    <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+      <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Code du Groupe / Liste</label>
+      <div class="flex gap-2">
+        <input type="text" id="groupCode" class="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm font-bold uppercase text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="ex: MAISON-42">
+        <button onclick="changeGroup()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 transition">
+          Rejoindre
+        </button>
+      </div>
+      <p class="text-xs text-gray-400 mt-2">💡 Partagez ce code avec vos proches pour qu'ils voient la même liste !</p>
+    </div>
+
+    <!-- Formulaire d'ajout -->
+    <form id="addForm" onsubmit="addItem(event)" class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 flex flex-col gap-3">
+      <div class="flex gap-2">
+        <input type="text" id="itemName" required placeholder="Ajouter un article..." class="flex-1 bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        <input type="number" id="itemQty" value="1" min="1" class="w-16 bg-gray-50 border border-gray-300 rounded-lg px-2 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-2.5 rounded-lg text-sm transition flex items-center justify-center gap-2">
+        <i class="fa-solid fa-plus"></i> Ajouter à la liste
+      </button>
+    </form>
+
+    <!-- En-tête Liste & Purge -->
+    <div class="flex justify-between items-center mt-2">
+      <h2 class="font-bold text-gray-700 flex items-center gap-2">
+        Articles <span id="itemCount" class="bg-gray-200 text-gray-700 text-xs px-2 py-0.5 rounded-full">0</span>
+      </h2>
+      <button onclick="clearBought()" class="text-xs text-red-600 hover:text-red-800 font-medium">
+        <i class="fa-solid fa-trash-can"></i> Supprimer les achetés
+      </button>
+    </div>
+
+    <!-- Conteneur de Liste -->
+    <ul id="itemList" class="flex flex-col gap-2"></ul>
+  </main>
+
+  <script>
+    // Configuration Firebase (Gratuit & temps réel)
+    const firebaseConfig = {
+      apiKey: "AIzaSyDemoKeyOnlyReplaceIfYouHaveOne",
+      authDomain: "shopping-pwa-demo.firebaseapp.com",
+      projectId: "shopping-pwa-demo",
+      storageBucket: "shopping-pwa-demo.appspot.com",
+      messagingSenderId: "123456789",
+      appId: "1:123456789:web:abcdef"
+    };
+
+    let db;
+    let currentGroup = localStorage.getItem('shopping_group') || 'MAISON';
+    let unsubscribe = null;
+    let items = [];
+
+    // Initialisation
+    document.getElementById('groupCode').value = currentGroup;
+    try {
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.firestore();
+      db.enablePersistence().catch(err => console.log('Offline mode active'));
+    } catch (e) {
+      console.warn("Firestore non connecté, fallback localStorage");
+    }
+
+    function changeGroup() {
+      const code = document.getElementById('groupCode').value.trim().toUpperCase();
+      if (!code) return;
+      currentGroup = code;
+      localStorage.setItem('shopping_group', currentGroup);
+      listenToGroup();
+    }
+
+    function listenToGroup() {
+      if (unsubscribe) unsubscribe();
+
+      if (db) {
+        unsubscribe = db.collection('groups').doc(currentGroup).collection('items')
+          .onSnapshot(snapshot => {
+            items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            render();
+          }, () => renderLocalFallback());
+      } else {
+        renderLocalFallback();
+      }
+    }
+
+    function renderLocalFallback() {
+      items = JSON.parse(localStorage.getItem('items_' + currentGroup) || '[]');
+      render();
+    }
+
+    function saveLocal() {
+      localStorage.setItem('items_' + currentGroup, JSON.stringify(items));
+    }
+
+    async function addItem(e) {
+      e.preventDefault();
+      const input = document.getElementById('itemName');
+      const qtyInput = document.getElementById('itemQty');
+      const name = input.value.trim();
+      const qty = parseInt(qtyInput.value) || 1;
+
+      if (!name) return;
+
+      const newItem = { name, quantity: qty, bought: false, createdAt: Date.now() };
+
+      if (db) {
+        await db.collection('groups').doc(currentGroup).collection('items').add(newItem);
+      } else {
+        newItem.id = Date.now().toString();
+        items.push(newItem);
+        saveLocal();
+        render();
+      }
+
+      input.value = '';
+      qtyInput.value = '1';
+    }
+
+    async function toggleBought(id, currentStatus) {
+      if (db) {
+        await db.collection('groups').doc(currentGroup).collection('items').doc(id).update({ bought: !currentStatus });
+      } else {
+        items = items.map(item => item.id === id ? { ...item, bought: !currentStatus } : item);
+        saveLocal();
+        render();
+      }
+    }
+
+    async function deleteItem(id) {
+      if (db) {
+        await db.collection('groups').doc(currentGroup).collection('items').doc(id).delete();
+      } else {
+        items = items.filter(item => item.id !== id);
+        saveLocal();
+        render();
+      }
+    }
+
+    async function clearBought() {
+      const boughtItems = items.filter(i => i.bought);
+      if (boughtItems.length === 0) return;
+
+      if (db) {
+        const batch = db.batch();
+        boughtItems.forEach(item => {
+          const ref = db.collection('groups').doc(currentGroup).collection('items').doc(item.id);
+          batch.delete(ref);
+        });
+        await batch.commit();
+      } else {
+        items = items.filter(i => !i.bought);
+        saveLocal();
+        render();
+      }
+    }
+
+    function render() {
+      const listEl = document.getElementById('itemList');
+      document.getElementById('itemCount').innerText = items.length;
+      listEl.innerHTML = '';
+
+      if (items.length === 0) {
+        listEl.innerHTML = `<li class="text-center py-8 text-gray-400 text-sm">La liste est vide 🛒</li>`;
+        return;
+      }
+
+      // Tri: non achetés d'abord
+      items.sort((a, b) => a.bought - b.bought || b.createdAt - a.createdAt);
+
+      items.forEach(item => {
+        const li = document.createElement('li');
+        li.className = `bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between transition ${item.bought ? 'bg-gray-50' : ''}`;
+        li.innerHTML = `
+          <div class="flex items-center gap-3 cursor-pointer flex-1" onclick="toggleBought('${item.id}', ${item.bought})">
+            <input type="checkbox" ${item.bought ? 'checked' : ''} class="w-5 h-5 text-emerald-600 rounded focus:ring-emerald-500">
+            <span class="text-sm font-medium ${item.bought ? 'strike-through text-gray-400' : 'text-gray-800'}">
+              ${item.name} ${item.quantity > 1 ? `<span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full ml-1">x${item.quantity}</span>` : ''}
+            </span>
+          </div>
+          <button onclick="deleteItem('${item.id}')" class="text-gray-300 hover:text-red-500 p-2">
+            <i class="fa-solid fa-trash-can"></i>
+          </button>
+        `;
+        listEl.appendChild(li);
+      });
+    }
+
+    // Enregistrement du Service Worker PWA
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(err => console.log('SW reg error:', err));
+    }
+
+    listenToGroup();
+  </script>
+</body>
+</html>
